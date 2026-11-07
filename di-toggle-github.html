@@ -1,0 +1,52 @@
+<!-- 貼到你的股票網頁：開關會寫入 repo 的 mu-live.json，並立即觸發 GitHub Actions -->
+<label style="display:flex;align-items:center;gap:8px;font-size:14px">
+  <input type="checkbox" id="diToggle"> 離開網頁後在靈動島顯示股價
+</label>
+<div id="diMsg" style="font-size:12px;color:#888"></div>
+<script>
+// 改成放置 mu-live.json 與 workflow 的 repository
+const GH = { owner: 'YOUR-NAME', repo: 'YOUR-REPO', branch: 'main', workflow: 'mu-live.yml', file: 'mu-live.json' };
+const el = document.getElementById('diToggle'), msg = document.getElementById('diMsg');
+const say = t => msg.textContent = t;
+
+// GitHub 細粒度 token（只限這個 repo；Contents 與 Actions 皆需 Read and write），只存在這個瀏覽器
+function tok() {
+  let t = localStorage.getItem('muGhToken');
+  if (!t) { t = prompt('請輸入 GitHub token'); if (t) localStorage.setItem('muGhToken', t); }
+  return t || '';
+}
+const H = (raw) => ({ Authorization: 'Bearer ' + tok(), Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json' });
+const url = p => `https://api.github.com/repos/${GH.owner}/${GH.repo}/${p}`;
+
+async function getState() {
+  const r = await fetch(url(`contents/${GH.file}?ref=${GH.branch}&t=${Date.now()}`), { headers: H(true), cache: 'no-store' });
+  return r.ok ? JSON.parse(await r.text()) : { active: false };
+}
+async function setState(obj) {
+  const g = await fetch(url(`contents/${GH.file}?ref=${GH.branch}`), { headers: H() });
+  const sha = g.ok ? (await g.json()).sha : undefined;
+  const r = await fetch(url(`contents/${GH.file}`), {
+    method: 'PUT', headers: { ...H(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'MU live ' + (obj.active ? 'on' : 'off'), content: btoa(JSON.stringify(obj)), branch: GH.branch, sha })
+  });
+  if (!r.ok) throw new Error('寫入狀態失敗 ' + r.status);
+}
+async function dispatch(action) {
+  const r = await fetch(url(`actions/workflows/${GH.workflow}/dispatches`), {
+    method: 'POST', headers: { ...H(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: GH.branch, inputs: { action } })
+  });
+  if (!r.ok) throw new Error('觸發工作流程失敗 ' + r.status);
+}
+
+getState().then(s => { el.checked = !!s.active; }).catch(() => {});
+
+el.onchange = async () => {
+  el.disabled = true; say('處理中…');
+  try {
+    if (el.checked) { await setState({ active: true, since: Date.now() }); await dispatch('start'); say('已啟動，約 1 分鐘內出現在靈動島'); }
+    else { await setState({ active: false }); await dispatch('stop'); say('已停止'); }
+  } catch (e) { el.checked = !el.checked; say('失敗：' + e.message); if (/40[13]/.test(e.message)) localStorage.removeItem('muGhToken'); }
+  el.disabled = false;
+};
+</script>
